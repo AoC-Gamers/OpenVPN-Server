@@ -10,6 +10,8 @@ Servidor OpenVPN usando Docker (imagen `kylemanna/openvpn`) y Docker Compose.
 Dependencias opcionales (automatizaciones):
 
 - Para empaquetar `.zip`: `zip`.
+- Para sincronizar CA/CRL/ta.key entre 2 servidores: `rsync` (instalar en primario y secundario).
+- Para usar el Makefile (`make health`, `make client-export`, etc.): `make`.
 - Para backups/restore: `tar` (normalmente ya viene instalado).
 - Para hashes: `sha256sum` (en Debian/Ubuntu viene en `coreutils`).
 
@@ -17,7 +19,7 @@ En Debian/Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y zip
+sudo apt install -y zip rsync make
 ```
 
 > Nota: el servicio usa `network_mode: host`, así que el contenedor expone OpenVPN directamente en el host.
