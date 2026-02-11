@@ -133,6 +133,9 @@ Notas de seguridad / overwrite:
 
 - `export` y `qr` no sobrescriben archivos existentes a menos que uses `--force`.
 - Si usas `--out`, la ruta debe quedar dentro de `./clients` (el script rechaza rutas absolutas o con `..`).
+- Si usas `--out`, `export` exige que termine en `.ovpn` y `qr` exige que termine en `.png`.
+- `--force` significa "sobrescribir archivos de salida" (no recrea/rota credenciales).
+- Para rotar credenciales: `revoke --remove` + `create-export`.
 
 Ejemplos con `--force`:
 
@@ -141,6 +144,17 @@ Ejemplos con `--force`:
 ./scripts/ovpn.sh qr lechuga --out ./clients/lechuga.png --force
 ./scripts/ovpn.sh package lechuga --force
 ```
+
+Ejemplos usando Make (equivalentes):
+
+```bash
+make client-export name=lechuga force=1
+make client-export name=lechuga out=./clients/lechuga.ovpn force=1
+make client-qr name=lechuga out=./clients/lechuga.png force=1
+make client-package name=lechuga pass=1 force=1
+```
+
+Nota: `export`/`package` fallan con un mensaje claro si el CN no existe o está revocado.
 
 Cliente sin password:
 
