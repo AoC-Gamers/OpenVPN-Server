@@ -1,0 +1,19 @@
+services:
+  openvpn:
+    image: kylemanna/openvpn
+    network_mode: host
+    container_name: openvpn
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "${OVPN_PORT:-1194}:${OVPN_PORT:-1194}/udp"
+    volumes:
+      - ./ovpn-data:/etc/openvpn
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    healthcheck:
+      test: ["CMD-SHELL", "ps | grep -q '[o]penvpn'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# OpenVPN persistent data (contains keys/certs)
+ovpn-data/
+
+# Client profiles
+clients/
+*.ovpn
+
+# Backups (contain secrets)
+backups/
+
+# Packages (contain secrets)
+packages/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs
+*.log
