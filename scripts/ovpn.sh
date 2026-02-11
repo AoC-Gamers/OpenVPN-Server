@@ -44,7 +44,10 @@ validate_client_name() {
 }
 
 ensure_initialized() {
-  [[ -d "./ovpn-data/pki" ]] || die "No existe ./ovpn-data/pki. Ejecuta primero ovpn_genconfig + ovpn_initpki."
+  [[ -d "./ovpn-data" ]] || die "No existe ./ovpn-data. Ejecuta primero ovpn_genconfig + ovpn_initpki."
+  # Ojo: el PKI suele quedar con permisos root (0700). No exigimos que sea accesible desde el host,
+  # porque podemos leer/operar vía contenedor.
+  [[ -e "./ovpn-data/pki" ]] || die "No existe ./ovpn-data/pki. Ejecuta primero ovpn_genconfig + ovpn_initpki."
 }
 
 compose() {
@@ -286,32 +289,40 @@ index_file() {
   echo "./ovpn-data/pki/index.txt"
 }
 
+read_index() {
+  local idx_host
+  idx_host="$(index_file)"
+
+  if [[ -r "$idx_host" ]]; then
+    cat "$idx_host"
+    return 0
+  fi
+
+  # Fallback seguro: leer desde el contenedor (normalmente corre como root y tiene acceso).
+  # Esto evita recomendar chmod/chown sobre el PKI en el host.
+  compose run --rm openvpn sh -c 'cat /etc/openvpn/pki/index.txt' 2>/dev/null || \
+    die "No se pudo leer el index del PKI. Si el PKI existe pero tiene permisos root, asegúrate de que Docker pueda correr 'docker compose run ...'."
+}
+
 client_list() {
   ensure_initialized
 
-  local idx
-  idx="$(index_file)"
-  [[ -f "$idx" ]] || die "No existe $idx"
-
   echo "STATUS\tEXPIRY\t\tCN"
-  awk -F'\t' '
+  read_index | awk -F'\t' '
     /^[VR]/ {
       status=$1
-      exp=$2
+      expiry=$2
       cn=$6
       sub(/^\/CN=/, "", cn)
-      printf "%s\t%s\t%s\n", status, exp, cn
+      printf "%s\t%s\t%s\n", status, expiry, cn
     }
-  ' "$idx" | sort -k3,3
+  ' | sort -k3,3
 }
 
 client_cert_status() {
   local client="$1"
-  local idx
-  idx="$(index_file)"
-  [[ -f "$idx" ]] || die "No existe $idx"
 
-  awk -F'\t' -v c="/CN=${client}" '($6==c){print $1; exit 0}' "$idx" || true
+  read_index | awk -F'\t' -v c="/CN=${client}" '($6==c){print $1; exit 0}' || true
 }
 
 assert_client_exportable() {
@@ -329,12 +340,8 @@ client_show() {
   validate_client_name "$client"
   ensure_initialized
 
-  local idx
-  idx="$(index_file)"
-  [[ -f "$idx" ]] || die "No existe $idx"
-
   local line
-  line="$(awk -F'\t' -v c="/CN=${client}" '($6==c){print; exit 0}' "$idx" || true)"
+  line="$(read_index | awk -F'\t' -v c="/CN=${client}" '($6==c){print; exit 0}' || true)"
   [[ -n "$line" ]] || die "No existe un certificado con CN=${client}"
 
   local status exp
