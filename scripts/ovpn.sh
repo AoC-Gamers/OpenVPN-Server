@@ -159,41 +159,6 @@ client_export() {
   echo "[OK] Generado: $out_path"
 }
 
-client_qr() {
-  local client="$1"
-  local out_path="${2:-}"
-  local force="${3:-}"
-
-  validate_client_name "$client"
-  ensure_initialized
-  have_cmd qrencode || die "No se encontró 'qrencode'. Instala el paquete 'qrencode'."
-
-  local out_dir
-  out_dir="$(clients_dir)"
-  mkdir -p "$out_dir"
-
-  local ovpn_path="${out_dir}/${client}.ovpn"
-  if [[ ! -f "$ovpn_path" ]]; then
-    client_export "$client" "$ovpn_path"
-  fi
-
-  if [[ -z "$out_path" ]]; then
-    out_path="${out_dir}/${client}.png"
-  else
-    validate_out_path "$out_dir" "$out_path"
-  fi
-
-  [[ "$out_path" == *.png ]] || die "El output de qr debe terminar en .png"
-
-  if [[ -e "$out_path" && "$force" != "--force" ]]; then
-    die "Ya existe: $out_path (usa --force para sobrescribir)"
-  fi
-
-  echo "[+] Generando QR: $out_path"
-  qrencode -o "$out_path" < "$ovpn_path"
-  echo "[OK] QR generado: $out_path"
-}
-
 client_package() {
   local client="$1"
   local with_pass=""
@@ -218,7 +183,6 @@ client_package() {
   validate_client_name "$client"
   ensure_initialized
   have_cmd zip || die "No se encontró 'zip'. Instala el paquete 'zip'."
-  have_cmd qrencode || die "No se encontró 'qrencode'. Instala el paquete 'qrencode'."
 
   # Si el cliente no existe aún, lo creamos aquí.
   local status
@@ -241,11 +205,6 @@ client_package() {
     client_export "$client" "$ovpn_path" "$force"
   fi
 
-  local qr_path="${out_clients}/${client}.png"
-  if [[ ! -f "$qr_path" || "$force" == "--force" ]]; then
-    client_qr "$client" "$qr_path" "$force"
-  fi
-
   local out_packages
   out_packages="$(packages_dir)"
   mkdir -p "$out_packages"
@@ -259,32 +218,29 @@ client_package() {
   trap 'rm -rf "$tmp"' EXIT
 
   cp "$ovpn_path" "$tmp/${client}.ovpn"
-  cp "$qr_path" "$tmp/${client}.png"
 
-  local ovpn_hash qr_hash
+  local ovpn_hash
   ovpn_hash="$(sha256_file "$tmp/${client}.ovpn")"
-  qr_hash="$(sha256_file "$tmp/${client}.png")"
 
   cat > "$tmp/metadata.json" <<EOF
 {
   "client": "${client}",
   "generated_at": "${ts}",
   "files": [
-    {"name": "${client}.ovpn", "sha256": "${ovpn_hash}"},
-    {"name": "${client}.png", "sha256": "${qr_hash}"}
+    {"name": "${client}.ovpn", "sha256": "${ovpn_hash}"}
   ]
 }
 EOF
 
   if have_cmd sha256sum; then
-    (cd "$tmp" && sha256sum "${client}.ovpn" "${client}.png" "metadata.json" > SHA256SUMS)
+    (cd "$tmp" && sha256sum "${client}.ovpn" "metadata.json" > SHA256SUMS)
   elif have_cmd shasum; then
-    (cd "$tmp" && shasum -a 256 "${client}.ovpn" "${client}.png" "metadata.json" > SHA256SUMS)
+    (cd "$tmp" && shasum -a 256 "${client}.ovpn" "metadata.json" > SHA256SUMS)
   fi
 
   echo "[+] Creando paquete: $zip_path"
-  (cd "$tmp" && zip -q -9 "$zip_path" "${client}.ovpn" "${client}.png" metadata.json SHA256SUMS 2>/dev/null || \
-    cd "$tmp" && zip -q -9 "$zip_path" "${client}.ovpn" "${client}.png" metadata.json)
+  (cd "$tmp" && zip -q -9 "$zip_path" "${client}.ovpn" metadata.json SHA256SUMS 2>/dev/null || \
+    cd "$tmp" && zip -q -9 "$zip_path" "${client}.ovpn" metadata.json)
 
   if have_cmd sha256sum; then
     sha256sum "$zip_path" > "${zip_path}.sha256"
@@ -403,19 +359,17 @@ Comandos (clientes):
   create <nombre> [--pass]
   export <nombre> [--out <ruta>] [--force]
   create-export <nombre> [--pass]
-  qr <nombre> [--out <ruta.png>] [--force]
   package <nombre> [--pass] [--force]
   revoke <nombre> [--remove]
   list
   show <nombre>
 
 Notas:
-  --force sobrescribe el archivo de salida (.ovpn/.png). No recrea credenciales.
+  --force sobrescribe el archivo de salida (.ovpn). No recrea credenciales.
   Para rotar credenciales: revoke --remove + create-export
 
 Ejemplos:
   ./scripts/ovpn.sh create-export lechuga
-  ./scripts/ovpn.sh qr lechuga
   ./scripts/ovpn.sh package lechuga
   ./scripts/ovpn.sh revoke lechuga --remove
   ./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn
@@ -434,8 +388,7 @@ menu() {
     echo "5) Revocar cliente"
     echo "6) Listar clientes"
     echo "7) Ver estado de cliente"
-    echo "8) Generar QR (.png)"
-    echo "9) Empaquetar ZIP (ovpn + qr + hashes)"
+    echo "8) Empaquetar ZIP (ovpn + hashes)"
     echo "0) Salir"
     echo
     read -r -p "> " choice
@@ -474,10 +427,6 @@ menu() {
         client_show "$client"
         ;;
       8)
-        read -r -p "Nombre cliente: " client
-        client_qr "$client" ""
-        ;;
-      9)
         read -r -p "Nombre cliente: " client
         read -r -p "¿Cliente con password? (s/N): " pass
         if [[ "${pass,,}" == "s" || "${pass,,}" == "si" || "${pass,,}" == "sí" ]]; then
@@ -557,32 +506,6 @@ main() {
       done
 
       client_export "$client" "$out" "$force"
-      ;;
-    qr)
-      local client="${1:-}"
-      shift || true
-
-      local out=""
-      local force=""
-
-      while [[ $# -gt 0 ]]; do
-        case "$1" in
-          --out)
-            out="${2:-}"
-            [[ -n "$out" ]] || die "Falta ruta después de --out"
-            shift 2 || true
-            ;;
-          --force)
-            force="--force"
-            shift || true
-            ;;
-          *)
-            die "Flag desconocida en qr: $1"
-            ;;
-        esac
-      done
-
-      client_qr "$client" "$out" "$force"
       ;;
     package)
       local client="${1:-}"

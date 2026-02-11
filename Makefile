@@ -10,7 +10,7 @@ BACKUP_SCRIPT := ./scripts/backup.sh
 
 .PHONY: help menu up down restart logs status health \
 	client-create client-create-pass client-export client-create-export \
-	client-revoke client-revoke-remove client-list client-show client-qr client-package \
+	client-revoke client-revoke-remove client-list client-show client-package \
 	backup-menu backup-create backup-list backup-verify backup-restore backup-delete
 
 help:
@@ -25,9 +25,8 @@ help:
 	@echo "  make client-revoke-remove name=<cliente>"
 	@echo "  make client-list"
 	@echo "  make client-show name=<cliente>"
-	@echo "  make client-qr name=<cliente> [out=./clients/<cliente>.png] [force=1]"
 	@echo "  make client-package name=<cliente> [pass=1] [force=1]"
-	@echo "  (Notas: export exige .ovpn, qr exige .png; force=1 sobrescribe archivos, no recrea credenciales)"
+	@echo "  (Notas: export exige .ovpn; force=1 sobrescribe archivos, no recrea credenciales)"
 	@echo "  make backup-menu"
 	@echo "  make backup-create [name=<nombre>]"
 	@echo "  make backup-list"
@@ -96,18 +95,6 @@ client-list:
 client-show:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
 	@$(OVPN_SCRIPT) show "$(name)"
-
-client-qr:
-	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@if [ -n "$(out)" ] && [ "$(force)" = "1" ]; then \
-		$(OVPN_SCRIPT) qr "$(name)" --out "$(out)" --force; \
-	elif [ -n "$(out)" ]; then \
-		$(OVPN_SCRIPT) qr "$(name)" --out "$(out)"; \
-	elif [ "$(force)" = "1" ]; then \
-		$(OVPN_SCRIPT) qr "$(name)" --force; \
-	else \
-		$(OVPN_SCRIPT) qr "$(name)"; \
-	fi
 
 client-package:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi

@@ -9,7 +9,7 @@ Servidor OpenVPN usando Docker (imagen `kylemanna/openvpn`) y Docker Compose.
 
 Dependencias opcionales (automatizaciones):
 
-- Para generar QR y empaquetar `.zip`: `qrencode`, `zip`.
+- Para empaquetar `.zip`: `zip`.
 - Para backups/restore: `tar` (normalmente ya viene instalado).
 - Para hashes: `sha256sum` (en Debian/Ubuntu viene en `coreutils`).
 
@@ -17,7 +17,7 @@ En Debian/Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y qrencode zip
+sudo apt install -y zip
 ```
 
 > Nota: el servicio usa `network_mode: host`, así que el contenedor expone OpenVPN directamente en el host.
@@ -122,7 +122,6 @@ Ejemplos no interactivos (útil para Make):
 ./scripts/ovpn.sh create-export lechuga
 ./scripts/ovpn.sh create lechuga --pass
 ./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn
-./scripts/ovpn.sh qr lechuga
 ./scripts/ovpn.sh package lechuga
 ./scripts/ovpn.sh list
 ./scripts/ovpn.sh show lechuga
@@ -133,7 +132,7 @@ Notas de seguridad / overwrite:
 
 - `export` y `qr` no sobrescriben archivos existentes a menos que uses `--force`.
 - Si usas `--out`, la ruta debe quedar dentro de `./clients` (el script rechaza rutas absolutas o con `..`).
-- Si usas `--out`, `export` exige que termine en `.ovpn` y `qr` exige que termine en `.png`.
+- Si usas `--out`, `export` exige que termine en `.ovpn`.
 - `--force` significa "sobrescribir archivos de salida" (no recrea/rota credenciales).
 - Para rotar credenciales: `revoke --remove` + `create-export`.
 
@@ -141,7 +140,6 @@ Ejemplos con `--force`:
 
 ```bash
 ./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn --force
-./scripts/ovpn.sh qr lechuga --out ./clients/lechuga.png --force
 ./scripts/ovpn.sh package lechuga --force
 ```
 
@@ -150,11 +148,12 @@ Ejemplos usando Make (equivalentes):
 ```bash
 make client-export name=lechuga force=1
 make client-export name=lechuga out=./clients/lechuga.ovpn force=1
-make client-qr name=lechuga out=./clients/lechuga.png force=1
 make client-package name=lechuga pass=1 force=1
 ```
 
 Nota: `export`/`package` fallan con un mensaje claro si el CN no existe o está revocado.
+
+Sobre `package`: genera un `.zip` con el perfil `.ovpn`, `metadata.json` y hashes (`SHA256SUMS` + hash del zip).
 
 Cliente sin password:
 
