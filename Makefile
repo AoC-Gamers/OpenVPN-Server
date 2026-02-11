@@ -19,14 +19,15 @@ help:
 	@echo "  make menu"
 	@echo "  make client-create name=<cliente>"
 	@echo "  make client-create-pass name=<cliente>"
-	@echo "  make client-export name=<cliente> [out=./clients/<cliente>.ovpn]"
+	@echo "  make client-export name=<cliente> [out=./clients/<cliente>.ovpn] [force=1]"
 	@echo "  make client-create-export name=<cliente> [pass=1]"
 	@echo "  make client-revoke name=<cliente>"
 	@echo "  make client-revoke-remove name=<cliente>"
 	@echo "  make client-list"
 	@echo "  make client-show name=<cliente>"
-	@echo "  make client-qr name=<cliente> [out=./clients/<cliente>.png]"
-	@echo "  make client-package name=<cliente> [pass=1]"
+	@echo "  make client-qr name=<cliente> [out=./clients/<cliente>.png] [force=1]"
+	@echo "  make client-package name=<cliente> [pass=1] [force=1]"
+	@echo "  (Notas: export exige .ovpn, qr exige .png; force=1 sobrescribe archivos, no recrea credenciales)"
 	@echo "  make backup-menu"
 	@echo "  make backup-create [name=<nombre>]"
 	@echo "  make backup-list"
@@ -67,7 +68,15 @@ client-create-pass:
 
 client-export:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@if [ -n "$(out)" ]; then $(OVPN_SCRIPT) export "$(name)" --out "$(out)"; else $(OVPN_SCRIPT) export "$(name)"; fi
+	@if [ -n "$(out)" ] && [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) export "$(name)" --out "$(out)" --force; \
+	elif [ -n "$(out)" ]; then \
+		$(OVPN_SCRIPT) export "$(name)" --out "$(out)"; \
+	elif [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) export "$(name)" --force; \
+	else \
+		$(OVPN_SCRIPT) export "$(name)"; \
+	fi
 
 client-create-export:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
@@ -90,11 +99,27 @@ client-show:
 
 client-qr:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@if [ -n "$(out)" ]; then $(OVPN_SCRIPT) qr "$(name)" --out "$(out)"; else $(OVPN_SCRIPT) qr "$(name)"; fi
+	@if [ -n "$(out)" ] && [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) qr "$(name)" --out "$(out)" --force; \
+	elif [ -n "$(out)" ]; then \
+		$(OVPN_SCRIPT) qr "$(name)" --out "$(out)"; \
+	elif [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) qr "$(name)" --force; \
+	else \
+		$(OVPN_SCRIPT) qr "$(name)"; \
+	fi
 
 client-package:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@if [ "$(pass)" = "1" ]; then $(OVPN_SCRIPT) package "$(name)" --pass; else $(OVPN_SCRIPT) package "$(name)"; fi
+	@if [ "$(pass)" = "1" ] && [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) package "$(name)" --pass --force; \
+	elif [ "$(pass)" = "1" ]; then \
+		$(OVPN_SCRIPT) package "$(name)" --pass; \
+	elif [ "$(force)" = "1" ]; then \
+		$(OVPN_SCRIPT) package "$(name)" --force; \
+	else \
+		$(OVPN_SCRIPT) package "$(name)"; \
+	fi
 
 backup-menu:
 	@$(BACKUP_SCRIPT) menu

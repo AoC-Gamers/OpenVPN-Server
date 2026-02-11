@@ -22,8 +22,29 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "No se encontró '$1' en PATH."
 }
 
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+need_docker_compose() {
+  need_cmd docker
+  docker compose version >/dev/null 2>&1 || die "Docker Compose (plugin) no está disponible: usa 'docker compose ...'"
+}
+
+validate_backup_dir() {
+  local dir="$1"
+  [[ -n "$dir" ]] || die "BACKUPS_DIR está vacío."
+  [[ "$dir" != -* ]] || die "BACKUPS_DIR no puede comenzar con '-': $dir"
+  if [[ "$dir" == *".."* ]]; then
+    die "BACKUPS_DIR no puede contener '..': $dir"
+  fi
+}
+
 backup_dir() {
-  echo "${BACKUPS_DIR:-./backups}"
+  local dir
+  dir="${BACKUPS_DIR:-./backups}"
+  validate_backup_dir "$dir"
+  echo "$dir"
 }
 
 ensure_initialized() {
@@ -59,7 +80,12 @@ backup_create() {
   [[ ! -e "$out_path" ]] || die "Ya existe: $out_path"
 
   echo "[+] Creando backup: $out_path"
-  tar -czf "$out_path" "./ovpn-data"
+  # Preferir --numeric-owner si está disponible (mejor portabilidad entre hosts)
+  if tar --help 2>/dev/null | grep -q -- '--numeric-owner'; then
+    tar --numeric-owner -czf "$out_path" "./ovpn-data"
+  else
+    tar -czf "$out_path" "./ovpn-data"
+  fi
 
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$out_path" > "${out_path}.sha256"
@@ -74,7 +100,36 @@ backup_list() {
   mkdir -p "$out_dir"
 
   echo "Backups en: $out_dir"
-  ls -1t "$out_dir"/*.tar.gz 2>/dev/null || echo "(sin backups)"
+  # Evita problemas cuando el glob no hace match.
+  local listing
+  listing="$(find "$out_dir" -maxdepth 1 -type f -name "*.tar.gz" -printf "%T@ %p\n" 2>/dev/null \
+    | sort -nr \
+    | cut -d' ' -f2- || true)"
+
+  if [[ -n "$listing" ]]; then
+    echo "$listing"
+  else
+    echo "(sin backups)"
+  fi
+}
+
+tar_validate_paths() {
+  local file="$1"
+
+  # Solo permitimos entradas bajo ovpn-data/ y sin rutas absolutas ni '..'
+  tar -tzf "$file" | awk '
+    BEGIN { bad=0 }
+    {
+      p=$0
+      if (p ~ /^\//) { bad=1 }
+      if (p ~ /(^|\/)\.\.($|\/)/) { bad=1 }
+      # Bloquea formas raras que pueden normalizarse a otra ruta.
+      if (p ~ /\/\.(\/|$)/) { bad=1 }
+      if (p ~ /\/\//) { bad=1 }
+      if (p !~ /^ovpn-data\// && p !~ /^ovpn-data$/) { bad=1 }
+    }
+    END { exit bad }
+  ' || die "El tar contiene rutas fuera de ovpn-data/ (posible path traversal)."
 }
 
 backup_verify() {
@@ -84,6 +139,7 @@ backup_verify() {
 
   echo "[+] Verificando integridad: $file"
   tar -tzf "$file" >/dev/null
+  tar_validate_paths "$file"
 
   if [[ -f "${file}.sha256" ]] && command -v sha256sum >/dev/null 2>&1; then
     (cd "$(dirname "$file")" && sha256sum -c "$(basename "${file}.sha256")")
@@ -130,8 +186,20 @@ backup_restore() {
     mv "./ovpn-data" "$bak"
   fi
 
-  echo "[+] Extrayendo backup"
-  tar -xzf "$file" -C .
+  echo "[+] Extrayendo backup (modo seguro)"
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+
+  # Extrae a tmp y luego mueve solo ovpn-data/
+  tar -xzf "$file" -C "$tmp"
+  [[ -d "$tmp/ovpn-data" ]] || die "Restore falló: el backup no contiene ovpn-data/."
+
+  mv "$tmp/ovpn-data" ./ovpn-data
+
+  # Limpieza del trap: evitar que el cleanup quede activo globalmente.
+  trap - EXIT
+  rm -rf "$tmp" || true
 
   [[ -d "./ovpn-data" ]] || die "Restore falló: no apareció ./ovpn-data tras extraer."
 
@@ -213,7 +281,7 @@ menu() {
 
 main() {
   need_cmd tar
-  need_cmd docker
+  need_docker_compose
   load_env
 
   local cmd="${1:-menu}"
@@ -230,6 +298,7 @@ main() {
       local name=""
       if [[ "${1:-}" == "--name" ]]; then
         name="${2:-}"
+        shift 2 || true
       fi
       backup_create "$name"
       ;;

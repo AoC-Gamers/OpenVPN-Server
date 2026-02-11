@@ -100,6 +100,8 @@ docker inspect -f '{{.State.Health.Status}}' openvpn
 make health
 ```
 
+> Tip: si tu interfaz VPN no es `tun0`, puedes definir `VPN_INTERFACE` en tu `.env` (ej: `VPN_INTERFACE=tun1`).
+
 ## Crear usuario cliente
 
 Hay 2 formas: manual o usando el script.
@@ -125,6 +127,19 @@ Ejemplos no interactivos (útil para Make):
 ./scripts/ovpn.sh list
 ./scripts/ovpn.sh show lechuga
 ./scripts/ovpn.sh revoke lechuga
+```
+
+Notas de seguridad / overwrite:
+
+- `export` y `qr` no sobrescriben archivos existentes a menos que uses `--force`.
+- Si usas `--out`, la ruta debe quedar dentro de `./clients` (el script rechaza rutas absolutas o con `..`).
+
+Ejemplos con `--force`:
+
+```bash
+./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn --force
+./scripts/ovpn.sh qr lechuga --out ./clients/lechuga.png --force
+./scripts/ovpn.sh package lechuga --force
 ```
 
 Cliente sin password:

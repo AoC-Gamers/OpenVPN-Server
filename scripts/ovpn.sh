@@ -26,6 +26,15 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+have_realpath_m() {
+  have_cmd realpath && realpath -m . >/dev/null 2>&1
+}
+
+need_docker_compose() {
+  need_cmd docker
+  docker compose version >/dev/null 2>&1 || die "Docker Compose (plugin) no está disponible: usa 'docker compose ...'"
+}
+
 validate_client_name() {
   local client="$1"
   [[ -n "$client" ]] || die "Falta nombre de cliente."
@@ -63,6 +72,41 @@ sha256_file() {
   die "No se encontró sha256sum ni shasum para calcular hashes."
 }
 
+validate_out_path() {
+  local out_dir="$1"
+  local out_path="$2"
+
+  [[ -n "$out_path" ]] || die "Ruta de salida vacía."
+  [[ "$out_path" != -* ]] || die "La ruta de salida no puede comenzar con '-': $out_path"
+
+  # Evita escribir fuera por path traversal.
+  if [[ "$out_path" == /* ]]; then
+    die "La ruta de salida no puede ser absoluta: $out_path"
+  fi
+  if [[ "$out_path" == *".."* ]]; then
+    die "La ruta de salida no puede contener '..': $out_path"
+  fi
+
+  # Si existe realpath -m, verifica que el destino esté dentro de out_dir.
+  if have_realpath_m; then
+    local out_dir_real out_path_real
+    out_dir_real="$(realpath -m "$out_dir")"
+    out_path_real="$(realpath -m "$out_path")"
+    case "$out_path_real" in
+      "$out_dir_real"/*) ;;
+      *) die "La ruta de salida debe estar dentro de $out_dir (recibido: $out_path)" ;;
+    esac
+  else
+    # Fallback simple: exige que la ruta empiece por el directorio de salida.
+    local out_dir_norm="${out_dir#./}"
+    local out_path_norm="${out_path#./}"
+    case "$out_path_norm" in
+      "$out_dir_norm"/*) ;;
+      *) die "La ruta de salida debe estar dentro de ./$out_dir_norm (recibido: $out_path)" ;;
+    esac
+  fi
+}
+
 client_create() {
   local client="$1"
   local with_pass="${2:-}"
@@ -82,9 +126,11 @@ client_create() {
 client_export() {
   local client="$1"
   local out_path="${2:-}"
+  local force="${3:-}"
 
   validate_client_name "$client"
   ensure_initialized
+  assert_client_exportable "$client"
 
   local out_dir
   out_dir="$(clients_dir)"
@@ -92,16 +138,31 @@ client_export() {
 
   if [[ -z "$out_path" ]]; then
     out_path="${out_dir}/${client}.ovpn"
+  else
+    validate_out_path "$out_dir" "$out_path"
+  fi
+
+  [[ "$out_path" == *.ovpn ]] || die "El output de export debe terminar en .ovpn"
+
+  if [[ -e "$out_path" && "$force" != "--force" ]]; then
+    die "Ya existe: $out_path (usa --force para sobrescribir)"
   fi
 
   echo "[+] Exportando perfil: $out_path"
-  compose run --rm openvpn ovpn_getclient "$client" > "$out_path"
+  (
+    local tmp
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    compose run --rm openvpn ovpn_getclient "$client" > "$tmp"
+    mv -f "$tmp" "$out_path"
+  )
   echo "[OK] Generado: $out_path"
 }
 
 client_qr() {
   local client="$1"
   local out_path="${2:-}"
+  local force="${3:-}"
 
   validate_client_name "$client"
   ensure_initialized
@@ -118,6 +179,14 @@ client_qr() {
 
   if [[ -z "$out_path" ]]; then
     out_path="${out_dir}/${client}.png"
+  else
+    validate_out_path "$out_dir" "$out_path"
+  fi
+
+  [[ "$out_path" == *.png ]] || die "El output de qr debe terminar en .png"
+
+  if [[ -e "$out_path" && "$force" != "--force" ]]; then
+    die "Ya existe: $out_path (usa --force para sobrescribir)"
   fi
 
   echo "[+] Generando QR: $out_path"
@@ -127,25 +196,54 @@ client_qr() {
 
 client_package() {
   local client="$1"
-  local with_pass="${2:-}"
+  local with_pass=""
+  local force=""
+
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pass)
+        with_pass="--pass"
+        ;;
+      --force)
+        force="--force"
+        ;;
+      *)
+        die "Flag desconocida en package: $1"
+        ;;
+    esac
+    shift || true
+  done
 
   validate_client_name "$client"
   ensure_initialized
   have_cmd zip || die "No se encontró 'zip'. Instala el paquete 'zip'."
   have_cmd qrencode || die "No se encontró 'qrencode'. Instala el paquete 'qrencode'."
 
+  # Si el cliente no existe aún, lo creamos aquí.
+  local status
+  status="$(client_cert_status "$client")"
+  if [[ -z "$status" ]]; then
+    client_create "$client" "$with_pass"
+    status="$(client_cert_status "$client")"
+  fi
+  if [[ "$status" == "R" ]]; then
+    die "El cliente '${client}' está revocado. Crea uno nuevo para empaquetar credenciales."
+  fi
+
   local out_clients
   out_clients="$(clients_dir)"
   mkdir -p "$out_clients"
 
   local ovpn_path="${out_clients}/${client}.ovpn"
-  if [[ ! -f "$ovpn_path" ]]; then
-    client_create_and_export "$client" "$with_pass"
+  if [[ ! -f "$ovpn_path" || "$force" == "--force" ]]; then
+    # Re-exporta desde el certificado existente. '--force' solo significa sobrescribir el archivo.
+    client_export "$client" "$ovpn_path" "$force"
   fi
 
   local qr_path="${out_clients}/${client}.png"
-  if [[ ! -f "$qr_path" ]]; then
-    client_qr "$client" "$qr_path"
+  if [[ ! -f "$qr_path" || "$force" == "--force" ]]; then
+    client_qr "$client" "$qr_path" "$force"
   fi
 
   local out_packages
@@ -195,13 +293,17 @@ EOF
   fi
 
   echo "[OK] Paquete generado: $zip_path"
+
+  # Evitar que el trap quede activo en modo menú.
+  trap - EXIT
+  rm -rf "$tmp" || true
 }
 
 client_create_and_export() {
   local client="$1"
   local with_pass="${2:-}"
   client_create "$client" "$with_pass"
-  client_export "$client"
+  client_export "$client" "" "--force"
 }
 
 client_revoke() {
@@ -247,6 +349,25 @@ client_list() {
   ' "$idx" | sort -k3,3
 }
 
+client_cert_status() {
+  local client="$1"
+  local idx
+  idx="$(index_file)"
+  [[ -f "$idx" ]] || die "No existe $idx"
+
+  awk -F'\t' -v c="/CN=${client}" '($6==c){print $1; exit 0}' "$idx" || true
+}
+
+assert_client_exportable() {
+  local client="$1"
+  local status
+  status="$(client_cert_status "$client")"
+  [[ -n "$status" ]] || die "No existe un certificado con CN=${client}"
+  if [[ "$status" == "R" ]]; then
+    die "El cliente '${client}' está revocado. Crea uno nuevo si necesitas credenciales."
+  fi
+}
+
 client_show() {
   local client="$1"
   validate_client_name "$client"
@@ -280,13 +401,17 @@ Uso:
 Comandos (clientes):
   menu
   create <nombre> [--pass]
-  export <nombre> [--out <ruta>]
+  export <nombre> [--out <ruta>] [--force]
   create-export <nombre> [--pass]
-  qr <nombre> [--out <ruta.png>]
-  package <nombre> [--pass]
+  qr <nombre> [--out <ruta.png>] [--force]
+  package <nombre> [--pass] [--force]
   revoke <nombre> [--remove]
   list
   show <nombre>
+
+Notas:
+  --force sobrescribe el archivo de salida (.ovpn/.png). No recrea credenciales.
+  Para rotar credenciales: revoke --remove + create-export
 
 Ejemplos:
   ./scripts/ovpn.sh create-export lechuga
@@ -294,7 +419,7 @@ Ejemplos:
   ./scripts/ovpn.sh package lechuga
   ./scripts/ovpn.sh revoke lechuga --remove
   ./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn
-+EOF
+EOF
 }
 
 menu() {
@@ -373,7 +498,7 @@ menu() {
 }
 
 main() {
-  need_cmd docker
+  need_docker_compose
   load_env
 
   local cmd="${1:-menu}"
@@ -387,34 +512,124 @@ main() {
       menu
       ;;
     create)
-      client_create "${1:-}" "${2:-}"
+      local client=""
+      local with_pass=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --pass)
+            with_pass="--pass"
+            shift || true
+            ;;
+          -* )
+            die "Flag desconocida en create: $1"
+            ;;
+          *)
+            [[ -z "$client" ]] || die "Argumento extra en create: $1"
+            client="$1"
+            shift || true
+            ;;
+        esac
+      done
+      client_create "$client" "$with_pass"
       ;;
     export)
       local client="${1:-}"
       shift || true
+
       local out=""
-      if [[ "${1:-}" == "--out" ]]; then
-        out="${2:-}"
-      fi
-      client_export "$client" "$out"
+      local force=""
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --out)
+            out="${2:-}"
+            [[ -n "$out" ]] || die "Falta ruta después de --out"
+            shift 2 || true
+            ;;
+          --force)
+            force="--force"
+            shift || true
+            ;;
+          *)
+            die "Flag desconocida en export: $1"
+            ;;
+        esac
+      done
+
+      client_export "$client" "$out" "$force"
       ;;
     qr)
       local client="${1:-}"
       shift || true
+
       local out=""
-      if [[ "${1:-}" == "--out" ]]; then
-        out="${2:-}"
-      fi
-      client_qr "$client" "$out"
+      local force=""
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --out)
+            out="${2:-}"
+            [[ -n "$out" ]] || die "Falta ruta después de --out"
+            shift 2 || true
+            ;;
+          --force)
+            force="--force"
+            shift || true
+            ;;
+          *)
+            die "Flag desconocida en qr: $1"
+            ;;
+        esac
+      done
+
+      client_qr "$client" "$out" "$force"
       ;;
     package)
-      client_package "${1:-}" "${2:-}"
+      local client="${1:-}"
+      shift || true
+      client_package "$client" "$@"
       ;;
     create-export)
-      client_create_and_export "${1:-}" "${2:-}"
+      local client=""
+      local with_pass=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --pass)
+            with_pass="--pass"
+            shift || true
+            ;;
+          -* )
+            die "Flag desconocida en create-export: $1"
+            ;;
+          *)
+            [[ -z "$client" ]] || die "Argumento extra en create-export: $1"
+            client="$1"
+            shift || true
+            ;;
+        esac
+      done
+      client_create_and_export "$client" "$with_pass"
       ;;
     revoke)
-      client_revoke "${1:-}" "${2:-}"
+      local client=""
+      local remove_mode=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --remove)
+            remove_mode="--remove"
+            shift || true
+            ;;
+          -* )
+            die "Flag desconocida en revoke: $1"
+            ;;
+          *)
+            [[ -z "$client" ]] || die "Argumento extra en revoke: $1"
+            client="$1"
+            shift || true
+            ;;
+        esac
+      done
+      client_revoke "$client" "$remove_mode"
       ;;
     list)
       client_list
