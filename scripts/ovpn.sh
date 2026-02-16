@@ -110,6 +110,44 @@ validate_out_path() {
   fi
 }
 
+apply_public_endpoint_to_profile() {
+  local profile_path="$1"
+  local endpoint="${PUBLIC_ENDPOINT:-}"
+  local remote_host=""
+  local remote_port=""
+  local remote_proto=""
+
+  [[ -n "$endpoint" ]] || return 0
+
+  if [[ "$endpoint" =~ ^([a-zA-Z0-9+.-]+)://([^:/]+):([0-9]+)$ ]]; then
+    remote_proto="${BASH_REMATCH[1],,}"
+    remote_host="${BASH_REMATCH[2]}"
+    remote_port="${BASH_REMATCH[3]}"
+  elif [[ "$endpoint" =~ ^([^:/]+):([0-9]+)$ ]]; then
+    remote_proto="${OVPN_PROTO:-udp}"
+    remote_host="${BASH_REMATCH[1]}"
+    remote_port="${BASH_REMATCH[2]}"
+  else
+    echo "[WARN] PUBLIC_ENDPOINT inválido, se mantiene 'remote' generado por OpenVPN: $endpoint" >&2
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  awk -v h="$remote_host" -v p="$remote_port" -v proto="$remote_proto" '
+    BEGIN { replaced=0 }
+    {
+      if (!replaced && $1 == "remote") {
+        print "remote " h " " p " " proto
+        replaced=1
+      } else {
+        print
+      }
+    }
+  ' "$profile_path" > "$tmp"
+  mv -f "$tmp" "$profile_path"
+}
+
 client_create() {
   local client="$1"
   local with_pass="${2:-}"
@@ -159,6 +197,7 @@ client_export() {
     compose run --rm openvpn ovpn_getclient "$client" > "$tmp"
     mv -f "$tmp" "$out_path"
   )
+  apply_public_endpoint_to_profile "$out_path"
   echo "[OK] Generado: $out_path"
 }
 
