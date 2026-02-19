@@ -1,0 +1,25 @@
+services:
+  openvpn-s2s:
+    image: kylemanna/openvpn
+    network_mode: host
+    container_name: openvpn-s2s
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./ovpn-s2s-data:/etc/openvpn-s2s
+    command:
+      - openvpn
+      - --config
+      - /etc/openvpn-s2s/client.conf
+      - --status
+      - /tmp/openvpn-s2s-status.log
+      - --verb
+      - "3"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps | grep -q '[o]penvpn --config /etc/openvpn-s2s/client.conf'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

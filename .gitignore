@@ -4,6 +4,13 @@
 # OpenVPN persistent data (contains keys/certs)
 ovpn-data/
 
+# OpenVPN S2S runtime data (keep templates/docs, ignore secrets)
+ovpn-s2s-data/client.conf
+ovpn-s2s-data/*.crt
+ovpn-s2s-data/*.key
+ovpn-s2s-data/ta.key
+ovpn-s2s-data/*.ovpn
+
 # Client profiles
 clients/
 *.ovpn

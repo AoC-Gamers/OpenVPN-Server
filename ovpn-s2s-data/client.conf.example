@@ -1,0 +1,24 @@
+client
+dev tun0
+proto udp
+remote oracle-vpn.example.com 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+auth-nocache
+verb 3
+
+# Reemplaza estos paths con tus archivos reales dentro de /etc/openvpn-s2s
+ca /etc/openvpn-s2s/ca.crt
+cert /etc/openvpn-s2s/valpo2.crt
+key /etc/openvpn-s2s/valpo2.key
+tls-auth /etc/openvpn-s2s/ta.key 1
+
+# Rutas esperadas para el S2S (ajustar según Oracle)
+route 10.8.0.0 255.255.255.0
+route 10.0.0.0 255.0.0.0
+
+# Opcional: si Oracle empuja redirect-gateway y no quieres full tunnel
+pull-filter ignore "redirect-gateway"

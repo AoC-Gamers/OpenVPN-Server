@@ -2,6 +2,8 @@
 
 Servidor OpenVPN usando Docker (imagen `kylemanna/openvpn`) y Docker Compose.
 
+Además del servidor principal, este proyecto incluye un stack separado para cliente OpenVPN site-to-site (`docker-compose.s2s.yml`).
+
 ## Requisitos
 
 - Docker + Docker Compose v2 (`docker compose`).
@@ -22,6 +24,13 @@ sudo apt install -y zip make
 ```
 
 > Nota: el servicio usa `network_mode: host`, así que el contenedor expone OpenVPN directamente en el host.
+
+## Estructura de stacks
+
+- Servidor OpenVPN (PKI/CA propia): `docker-compose.yml` + `ovpn-data/`
+- Cliente site-to-site (separado): `docker-compose.s2s.yml` + `ovpn-s2s-data/`
+
+Esto permite mantener en un solo proyecto los dos modos sin mezclar configuraciones.
 
 ## Configuración
 
@@ -102,6 +111,39 @@ make health
 ```
 
 > Tip: si tu interfaz VPN no es `tun0`, puedes definir `VPN_INTERFACE` en tu `.env` (ej: `VPN_INTERFACE=tun1`).
+
+## Cliente Site-to-Site (stack separado)
+
+Este stack corre un cliente OpenVPN persistente independiente del servidor.
+
+1. Preparar configuración cliente:
+
+```bash
+cp ovpn-s2s-data/client.conf.example ovpn-s2s-data/client.conf
+```
+
+2. Copiar credenciales cliente (`ca.crt`, `*.crt`, `*.key`, `ta.key`) dentro de `ovpn-s2s-data/`.
+
+3. Ajustar `ovpn-s2s-data/client.conf` (remote, rutas, archivos).
+
+4. Levantar cliente S2S:
+
+```bash
+docker compose -f docker-compose.s2s.yml up -d
+```
+
+Comandos útiles:
+
+```bash
+docker compose -f docker-compose.s2s.yml ps
+docker compose -f docker-compose.s2s.yml logs -f --tail=100 openvpn-s2s
+make s2s-up
+make s2s-status
+```
+
+Notas:
+- No reutilizar PKI del servidor para el cliente S2S.
+- Este modo está pensado para despliegue portable (por ejemplo, descargar en Valpo2 y levantar solo `openvpn-s2s`).
 
 ## Crear usuario cliente
 

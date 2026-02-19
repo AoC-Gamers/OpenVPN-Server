@@ -8,7 +8,7 @@
 OVPN_SCRIPT := ./scripts/ovpn.sh
 BACKUP_SCRIPT := ./scripts/backup.sh
 
-.PHONY: help menu up down restart logs status health \
+.PHONY: help menu up down restart logs status health s2s-up s2s-down s2s-restart s2s-logs s2s-status \
 	client-create client-create-pass client-export client-create-export \
 	client-revoke client-revoke-remove client-list client-show client-package \
 	backup-menu backup-create backup-list backup-verify backup-restore backup-delete
@@ -16,6 +16,7 @@ BACKUP_SCRIPT := ./scripts/backup.sh
 help:
 	@echo "Targets:"
 	@echo "  make up|down|restart|logs|status|health"
+	@echo "  make s2s-up|s2s-down|s2s-restart|s2s-logs|s2s-status"
 	@echo "  make menu"
 	@echo "  make client-create name=<cliente>"
 	@echo "  make client-create-pass name=<cliente>"
@@ -56,6 +57,23 @@ status:
 
 health:
 	@./scripts/health.sh
+
+s2s-up:
+	docker compose -f docker-compose.s2s.yml up -d
+
+s2s-down:
+	docker compose -f docker-compose.s2s.yml down
+
+s2s-restart:
+	docker compose -f docker-compose.s2s.yml restart openvpn-s2s
+
+s2s-logs:
+	docker compose -f docker-compose.s2s.yml logs -f --tail=200 openvpn-s2s
+
+s2s-status:
+	@docker compose -f docker-compose.s2s.yml ps
+	@echo "---"
+	@ip -br a | grep tun || true
 
 client-create:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
