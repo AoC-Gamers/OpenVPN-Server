@@ -1,8 +1,8 @@
 services:
-  openvpn:
+  openvpn-sv:
     image: kylemanna/openvpn
     network_mode: host
-    container_name: openvpn
+    container_name: openvpn-sv
     cap_add:
       - NET_ADMIN
     volumes:
