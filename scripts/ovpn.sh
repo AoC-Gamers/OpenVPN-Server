@@ -157,10 +157,10 @@ client_create() {
 
   if [[ "$with_pass" == "--pass" ]]; then
     echo "[+] Creando cliente CON password: $client"
-    compose run --rm openvpn easyrsa build-client-full "$client"
+    compose run --rm openvpn-sv easyrsa build-client-full "$client"
   else
     echo "[+] Creando cliente SIN password: $client"
-    compose run --rm openvpn easyrsa build-client-full "$client" nopass
+    compose run --rm openvpn-sv easyrsa build-client-full "$client" nopass
   fi
 }
 
@@ -194,7 +194,7 @@ client_export() {
     local tmp
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' EXIT
-    compose run --rm openvpn ovpn_getclient "$client" > "$tmp"
+    compose run --rm openvpn-sv ovpn_getclient "$client" > "$tmp"
     mv -f "$tmp" "$out_path"
   )
   apply_public_endpoint_to_profile "$out_path"
@@ -313,14 +313,14 @@ client_revoke() {
 
   if [[ "$remove_mode" == "--remove" ]]; then
     echo "[+] Revocando y removiendo cliente: $client"
-    compose run --rm openvpn ovpn_revokeclient "$client" remove
+    compose run --rm openvpn-sv ovpn_revokeclient "$client" remove
   else
     echo "[+] Revocando cliente: $client"
-    compose run --rm openvpn ovpn_revokeclient "$client"
+    compose run --rm openvpn-sv ovpn_revokeclient "$client"
   fi
 
   # Intentar reiniciar para aplicar CRL (si el servicio existe)
-  compose restart openvpn >/dev/null 2>&1 || true
+  compose restart openvpn-sv >/dev/null 2>&1 || true
   echo "[OK] Cliente revocado: $client"
 }
 
@@ -339,7 +339,7 @@ read_index() {
 
   # Fallback seguro: leer desde el contenedor (normalmente corre como root y tiene acceso).
   # Esto evita recomendar chmod/chown sobre el PKI en el host.
-  compose run --rm openvpn sh -c 'cat /etc/openvpn/pki/index.txt' 2>/dev/null || \
+  compose run --rm openvpn-sv sh -c 'cat /etc/openvpn/pki/index.txt' 2>/dev/null || \
     die "No se pudo leer el index del PKI. Si el PKI existe pero tiene permisos root, asegúrate de que Docker pueda correr 'docker compose run ...'."
 }
 
