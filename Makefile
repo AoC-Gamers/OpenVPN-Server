@@ -7,8 +7,10 @@
 
 OVPN_SCRIPT := ./scripts/ovpn.sh
 BACKUP_SCRIPT := ./scripts/backup.sh
+S2S_PACKAGE_SCRIPT := ./scripts/s2s-package.sh
 
 .PHONY: help menu up down restart logs status health s2s-up s2s-down s2s-restart s2s-logs s2s-status \
+	s2s-package \
 	client-create client-export client-create-export client-ip-assign client-ip-list client-ip-sync \
 	client-revoke client-revoke-remove client-list client-show client-package \
 	backup-menu backup-create backup-list backup-verify backup-restore backup-delete
@@ -17,6 +19,7 @@ help:
 	@echo "Targets:"
 	@echo "  make up|down|restart|logs|status|health"
 	@echo "  make s2s-up|s2s-down|s2s-restart|s2s-logs|s2s-status"
+	@echo "  make s2s-package name=<cliente-s2s> [out=./packages/<archivo>.tar.gz] [force=1]"
 	@echo "  make menu"
 	@echo "  make client-create name=<cliente> [ip=auto] [owner=<owner>] [device=<device>] [pass=1]"
 	@echo "  make client-export name=<cliente> [out=./clients/<cliente>.ovpn] [force=1]"
@@ -76,6 +79,18 @@ s2s-status:
 	@docker compose -f docker-compose.s2s.yml ps
 	@echo "---"
 	@ip -br a | grep tun || true
+
+s2s-package:
+	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente-s2s>"; exit 2; fi
+	@if [ -n "$(out)" ] && [ "$(force)" = "1" ]; then \
+		$(S2S_PACKAGE_SCRIPT) "$(name)" --out "$(out)" --force; \
+	elif [ -n "$(out)" ]; then \
+		$(S2S_PACKAGE_SCRIPT) "$(name)" --out "$(out)"; \
+	elif [ "$(force)" = "1" ]; then \
+		$(S2S_PACKAGE_SCRIPT) "$(name)" --force; \
+	else \
+		$(S2S_PACKAGE_SCRIPT) "$(name)"; \
+	fi
 
 client-create:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi

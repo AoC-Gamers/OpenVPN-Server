@@ -140,11 +140,12 @@ docker compose -f docker-compose.s2s.yml ps
 docker compose -f docker-compose.s2s.yml logs -f --tail=100 openvpn-s2s
 make s2s-up
 make s2s-status
+make s2s-package name=valpo1
 ```
 
 Notas:
 - No reutilizar PKI del servidor para el cliente S2S.
-- Este modo está pensado para despliegue portable (por ejemplo, descargar en Valpo2 y levantar solo `openvpn-s2s`).
+- Este modo está pensado para despliegue portable en un sitio remoto que sí use cliente S2S.
 
 ## Crear usuario cliente
 

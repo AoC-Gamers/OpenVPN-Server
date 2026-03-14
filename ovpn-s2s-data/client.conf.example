@@ -12,8 +12,8 @@ verb 3
 
 # Reemplaza estos paths con tus archivos reales dentro de /etc/openvpn-s2s
 ca /etc/openvpn-s2s/ca.crt
-cert /etc/openvpn-s2s/valpo2.crt
-key /etc/openvpn-s2s/valpo2.key
+cert /etc/openvpn-s2s/client.crt
+key /etc/openvpn-s2s/client.key
 tls-auth /etc/openvpn-s2s/ta.key 1
 
 # Rutas esperadas para el S2S (ajustar según Oracle)
