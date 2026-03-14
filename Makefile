@@ -2,14 +2,14 @@
 
 # Nota: pensado para ejecutarse en Linux (host del servidor).
 # Uso:
-#   make client-create-export name=lechuga
-#   make client-revoke name=lechuga
+#   make client-create-export name=lechuga-pc ip=auto owner=lechuga device=pc
+#   make client-revoke name=lechuga-pc
 
 OVPN_SCRIPT := ./scripts/ovpn.sh
 BACKUP_SCRIPT := ./scripts/backup.sh
 
 .PHONY: help menu up down restart logs status health s2s-up s2s-down s2s-restart s2s-logs s2s-status \
-	client-create client-create-pass client-export client-create-export \
+	client-create client-export client-create-export client-ip-assign client-ip-list client-ip-sync \
 	client-revoke client-revoke-remove client-list client-show client-package \
 	backup-menu backup-create backup-list backup-verify backup-restore backup-delete
 
@@ -18,10 +18,12 @@ help:
 	@echo "  make up|down|restart|logs|status|health"
 	@echo "  make s2s-up|s2s-down|s2s-restart|s2s-logs|s2s-status"
 	@echo "  make menu"
-	@echo "  make client-create name=<cliente>"
-	@echo "  make client-create-pass name=<cliente>"
+	@echo "  make client-create name=<cliente> [ip=auto] [owner=<owner>] [device=<device>] [pass=1]"
 	@echo "  make client-export name=<cliente> [out=./clients/<cliente>.ovpn] [force=1]"
-	@echo "  make client-create-export name=<cliente> [pass=1]"
+	@echo "  make client-create-export name=<cliente> [ip=auto] [owner=<owner>] [device=<device>] [pass=1]"
+	@echo "  make client-ip-assign name=<cliente> [ip=auto] [owner=<owner>] [device=<device>]"
+	@echo "  make client-ip-list"
+	@echo "  make client-ip-sync"
 	@echo "  make client-revoke name=<cliente>"
 	@echo "  make client-revoke-remove name=<cliente>"
 	@echo "  make client-list"
@@ -77,11 +79,13 @@ s2s-status:
 
 client-create:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@$(OVPN_SCRIPT) create "$(name)"
-
-client-create-pass:
-	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@$(OVPN_SCRIPT) create "$(name)" --pass
+	@args="--vpn-ip $(if $(ip),$(ip),auto)"; \
+	if [ -n "$(owner)" ]; then args="$$args --owner $(owner)"; fi; \
+	if [ -n "$(device)" ]; then args="$$args --device $(device)"; fi; \
+	if [ -n "$(note)" ]; then args="$$args --note \"$(note)\""; fi; \
+	if [ "$(pass)" = "1" ]; then args="$$args --pass"; fi; \
+	if [ "$(force)" = "1" ]; then args="$$args --force"; fi; \
+	$(OVPN_SCRIPT) create "$(name)" $$args
 
 client-export:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
@@ -97,7 +101,28 @@ client-export:
 
 client-create-export:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
-	@if [ "$(pass)" = "1" ]; then $(OVPN_SCRIPT) create-export "$(name)" --pass; else $(OVPN_SCRIPT) create-export "$(name)"; fi
+	@args="--vpn-ip $(if $(ip),$(ip),auto)"; \
+	if [ -n "$(owner)" ]; then args="$$args --owner $(owner)"; fi; \
+	if [ -n "$(device)" ]; then args="$$args --device $(device)"; fi; \
+	if [ -n "$(note)" ]; then args="$$args --note \"$(note)\""; fi; \
+	if [ "$(pass)" = "1" ]; then args="$$args --pass"; fi; \
+	if [ "$(force)" = "1" ]; then args="$$args --force"; fi; \
+	$(OVPN_SCRIPT) create-export "$(name)" $$args
+
+client-ip-assign:
+	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi
+	@args="--vpn-ip $(if $(ip),$(ip),auto)"; \
+	if [ -n "$(owner)" ]; then args="$$args --owner $(owner)"; fi; \
+	if [ -n "$(device)" ]; then args="$$args --device $(device)"; fi; \
+	if [ -n "$(note)" ]; then args="$$args --note \"$(note)\""; fi; \
+	if [ "$(force)" = "1" ]; then args="$$args --force"; fi; \
+	$(OVPN_SCRIPT) ip-assign "$(name)" $$args
+
+client-ip-list:
+	@$(OVPN_SCRIPT) ip-list
+
+client-ip-sync:
+	@$(OVPN_SCRIPT) ip-sync
 
 client-revoke:
 	@if [ -z "$(name)" ]; then echo "Falta: name=<cliente>"; exit 2; fi

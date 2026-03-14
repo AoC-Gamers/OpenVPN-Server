@@ -38,6 +38,7 @@ Edita el archivo `.env` con tus valores:
 
 - `PUBLIC_ENDPOINT`: endpoint público donde se conectarán los clientes (IP pública o DDNS). Formato esperado por OpenVPN: `udp://host:puerto`.
 - `OVPN_PORT` / `OVPN_PROTO`: puerto y protocolo (típicamente `1194/udp`).
+- `OVPN_CA_PASSPHRASE`: passphrase local de la CA para automatizaciones Easy-RSA no interactivas.
 - `LAN_SUBNET` / `LAN_MASK`: red LAN a la que quieres dar acceso desde la VPN (ruta a empujar al cliente).
 
 Ejemplo:
@@ -191,10 +192,38 @@ Ejemplos usando Make (equivalentes):
 ```bash
 make client-export name=lechuga force=1
 make client-export name=lechuga out=./clients/lechuga.ovpn force=1
+make client-create name=lechuga-pc ip=auto owner=lechuga device=pc
+make client-create-export name=lechuga-note ip=auto owner=lechuga device=notebook
 make client-package name=lechuga pass=1 force=1
 ```
 
 Nota: `export`/`package` fallan con un mensaje claro si el CN no existe o está revocado.
+
+### IP fija por perfil/dispositivo (JSON)
+
+El proyecto puede llevar un registro de IPs fijas en `ovpn-data/ip-assignments.json`.
+
+Comandos utiles:
+
+```bash
+./scripts/ovpn.sh ip-list
+./scripts/ovpn.sh ip-assign lechuga-pc --vpn-ip auto --owner lechuga --device pc
+./scripts/ovpn.sh create-export lechuga-note --vpn-ip auto --owner lechuga --device notebook
+```
+
+Equivalentes en `make`:
+
+```bash
+make client-ip-list
+make client-ip-assign name=lechuga-pc ip=auto owner=lechuga device=pc
+make client-create-export name=lechuga-note ip=auto owner=lechuga device=notebook
+```
+
+Notas:
+
+- `--vpn-ip auto` toma la siguiente IP libre del rango definido en el JSON.
+- La IP fija se escribe en `ovpn-data/ccd/<cliente>`.
+- El JSON sirve como inventario de asignaciones por perfil/dispositivo.
 
 Sobre `package`: genera un `.zip` con el perfil `.ovpn`, `metadata.json` y hashes (`SHA256SUMS` + hash del zip).
 
@@ -242,3 +271,9 @@ Ejemplos no interactivos (útil para Make):
 
 - Si `./ovpn-data/pki` no existe, primero debes correr la inicialización (sección “Inicializar configuración”).
 - Para que los clientes accedan a tu LAN, además de empujar la ruta, el host debe permitir forwarding y (según tu caso) NAT/reglas firewall. Esto depende de tu distro/topología.
+
+## Firewall (iptables)
+
+Para entender y operar las reglas del host (`VPNSITE_FORWARD`, puertos permitidos, `DROP` final tun->tun, persistencia y troubleshooting), revisa:
+
+- [`IPTABLES.md`](./IPTABLES.md)

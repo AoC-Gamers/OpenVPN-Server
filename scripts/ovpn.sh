@@ -54,12 +54,382 @@ compose() {
   docker compose "$@"
 }
 
+openvpn_sv_run() {
+  local -a extra_args=()
+  if [[ -n "${OVPN_CA_PASSPHRASE:-}" ]]; then
+    extra_args+=(-e "EASYRSA_PASSIN=pass:${OVPN_CA_PASSPHRASE}")
+  fi
+  docker compose run --rm "${extra_args[@]}" openvpn-sv "$@"
+}
+
 clients_dir() {
   echo "${CLIENTS_DIR:-./clients}"
 }
 
 packages_dir() {
   echo "${PACKAGES_DIR:-./packages}"
+}
+
+ccd_dir() {
+  echo "${CCD_DIR:-./ovpn-data/ccd}"
+}
+
+ip_registry_file() {
+  echo "${IP_ASSIGNMENTS_FILE:-./ovpn-data/ip-assignments.json}"
+}
+
+vpn_cidr() {
+  echo "${VPN_CIDR_OVERRIDE:-${VPN_SUBNET:-10.8.0.0}/24}"
+}
+
+vpn_pool_start() {
+  echo "${VPN_POOL_START:-10.8.0.10}"
+}
+
+vpn_pool_end() {
+  echo "${VPN_POOL_END:-10.8.0.254}"
+}
+
+need_jq() {
+  need_cmd jq
+}
+
+validate_ipv4() {
+  local ip="$1"
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "IP inválida: $ip"
+
+  local o1 o2 o3 o4
+  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
+  for octet in "$o1" "$o2" "$o3" "$o4"; do
+    [[ "$octet" =~ ^[0-9]+$ ]] || die "IP inválida: $ip"
+    (( octet >= 0 && octet <= 255 )) || die "IP inválida: $ip"
+  done
+}
+
+ip_prefix() {
+  local ip="$1"
+  validate_ipv4 "$ip"
+  local o1 o2 o3 o4
+  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
+  echo "${o1}.${o2}.${o3}"
+}
+
+ip_last_octet() {
+  local ip="$1"
+  validate_ipv4 "$ip"
+  local o1 o2 o3 o4
+  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
+  echo "$o4"
+}
+
+validate_vpn_ip() {
+  local ip="$1"
+  local cidr base
+  cidr="$(vpn_cidr)"
+  base="$(ip_prefix "${cidr%%/*}")"
+
+  validate_ipv4 "$ip"
+  [[ "$(ip_prefix "$ip")" == "$base" ]] || die "La IP $ip debe estar dentro de ${base}.0/24"
+
+  local last
+  last="$(ip_last_octet "$ip")"
+  (( last >= 3 && last <= 254 )) || die "La IP $ip debe usar un host entre 3 y 254"
+}
+
+ccd_static_assignments() {
+  local dir
+  dir="$(ccd_dir)"
+  [[ -d "$dir" ]] || return 0
+
+  while IFS= read -r file; do
+    local client ip
+    client="$(basename "$file")"
+    ip="$(awk '$1=="ifconfig-push"{print $2; exit 0}' "$file")"
+    [[ -n "$ip" ]] || continue
+    printf "%s\t%s\t%s\n" "$client" "$ip" "$file"
+  done < <(find "$dir" -maxdepth 1 -type f | sort)
+}
+
+ensure_ip_registry() {
+  ensure_initialized
+  need_jq
+
+  local file dir
+  file="$(ip_registry_file)"
+  dir="$(dirname "$file")"
+  mkdir -p "$dir"
+  mkdir -p "$(ccd_dir)"
+
+  if [[ ! -f "$file" ]]; then
+    cat > "$file" <<EOF
+{
+  "version": 1,
+  "network": {
+    "cidr": "$(vpn_cidr)",
+    "allocation_start": "$(vpn_pool_start)",
+    "allocation_end": "$(vpn_pool_end)",
+    "reserved": [
+      "10.8.0.1",
+      "10.8.0.2"
+    ]
+  },
+  "assignments": []
+}
+EOF
+  fi
+
+  jq empty "$file" >/dev/null 2>&1 || die "JSON inválido en $(ip_registry_file)"
+  ip_registry_sync_from_ccd >/dev/null
+}
+
+ip_registry_sync_from_ccd() {
+  local file tmp next client ip ccd_file
+  file="$(ip_registry_file)"
+  tmp="$(mktemp)"
+  cp "$file" "$tmp"
+
+  while IFS=$'\t' read -r client ip ccd_file; do
+    local device owner note
+    if grep -q '^iroute ' "$ccd_file"; then
+      device="s2s"
+      owner="infra"
+      note="Importado desde CCD site-to-site"
+    else
+      device="legacy"
+      owner="$client"
+      note="Importado desde CCD existente"
+    fi
+
+    next="$(mktemp)"
+    jq \
+      --arg client "$client" \
+      --arg owner "$owner" \
+      --arg device "$device" \
+      --arg ip "$ip" \
+      --arg note "$note" \
+      '
+      .assignments = (
+        [ .assignments[]? | select(.client != $client) ] + [
+          ((first(.assignments[]? | select(.client == $client)) // {}) + {
+            client: $client,
+            owner: ((first(.assignments[]? | select(.client == $client) | .owner) // $owner)),
+            device: ((first(.assignments[]? | select(.client == $client) | .device) // $device)),
+            vpn_ip: $ip,
+            status: ((first(.assignments[]? | select(.client == $client) | .status) // "assigned")),
+            source: ((first(.assignments[]? | select(.client == $client) | .source) // "ccd-sync")),
+            note: ((first(.assignments[]? | select(.client == $client) | .note) // $note))
+          })
+        ]
+        | sort_by(.vpn_ip)
+      )
+      ' "$tmp" > "$next"
+    mv -f "$next" "$tmp"
+  done < <(ccd_static_assignments)
+
+  mv -f "$tmp" "$file"
+}
+
+ip_registry_used_ips() {
+  local file
+  file="$(ip_registry_file)"
+
+  {
+    jq -r '.network.reserved[]?' "$file"
+    jq -r '.assignments[]? | select((.status // "assigned") != "revoked") | .vpn_ip' "$file"
+    ccd_static_assignments | awk -F'\t' '{print $2}'
+  } | sed '/^$/d' | sort -u
+}
+
+ip_registry_next_free_ip() {
+  ensure_ip_registry
+
+  local start end base start_octet end_octet used
+  start="$(jq -r '.network.allocation_start // empty' "$(ip_registry_file)")"
+  end="$(jq -r '.network.allocation_end // empty' "$(ip_registry_file)")"
+  [[ -n "$start" && -n "$end" ]] || die "Faltan allocation_start/allocation_end en $(ip_registry_file)"
+
+  validate_vpn_ip "$start"
+  validate_vpn_ip "$end"
+
+  base="$(ip_prefix "$start")"
+  start_octet="$(ip_last_octet "$start")"
+  end_octet="$(ip_last_octet "$end")"
+  (( start_octet <= end_octet )) || die "allocation_start debe ser <= allocation_end"
+
+  used="$(mktemp)"
+  ip_registry_used_ips > "$used"
+
+  local octet candidate
+  for octet in $(seq "$start_octet" "$end_octet"); do
+    candidate="${base}.${octet}"
+    if ! grep -Fxq "$candidate" "$used"; then
+      rm -f "$used"
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  rm -f "$used"
+  die "No quedan IPs libres entre $start y $end"
+}
+
+ip_registry_upsert_assignment() {
+  local client="$1"
+  local owner="${2:-}"
+  local device="${3:-}"
+  local ip="$4"
+  local note="${5:-}"
+  local force="${6:-}"
+  local source="${7:-manual}"
+
+  validate_client_name "$client"
+  ensure_ip_registry
+  validate_vpn_ip "$ip"
+
+  [[ -n "$owner" ]] || owner="$client"
+  [[ -n "$device" ]] || device="default"
+
+  local other_client existing_ip
+  other_client="$(jq -r --arg client "$client" --arg ip "$ip" '
+    .assignments[]?
+    | select((.status // "assigned") != "revoked" and .client != $client and .vpn_ip == $ip)
+    | .client
+  ' "$(ip_registry_file)" | head -n 1)"
+
+  if [[ -z "$other_client" ]]; then
+    other_client="$(ccd_static_assignments | awk -F'\t' -v client="$client" -v ip="$ip" '$1 != client && $2 == ip {print $1; exit 0}')"
+  fi
+  [[ -z "$other_client" ]] || die "La IP $ip ya está en uso por ${other_client}"
+
+  existing_ip="$(jq -r --arg client "$client" 'first(.assignments[]? | select(.client == $client) | .vpn_ip) // empty' "$(ip_registry_file)")"
+  if [[ -n "$existing_ip" && "$existing_ip" != "$ip" && "$force" != "--force" ]]; then
+    die "El cliente ${client} ya tiene asignada la IP ${existing_ip}. Usa --force para cambiarla."
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  jq \
+    --arg client "$client" \
+    --arg owner "$owner" \
+    --arg device "$device" \
+    --arg ip "$ip" \
+    --arg note "$note" \
+    --arg source "$source" \
+    '
+    .assignments = (
+      [ .assignments[]? | select(.client != $client) ] + [
+        ((first(.assignments[]? | select(.client == $client)) // {}) + {
+          client: $client,
+          owner: $owner,
+          device: $device,
+          vpn_ip: $ip,
+          status: "assigned",
+          source: $source
+        } + (if $note != "" then {note: $note} else {} end))
+      ]
+      | sort_by(.vpn_ip)
+    )
+    ' "$(ip_registry_file)" > "$tmp"
+  mv -f "$tmp" "$(ip_registry_file)"
+}
+
+ip_registry_mark_status() {
+  local client="$1"
+  local status="$2"
+
+  [[ -f "$(ip_registry_file)" ]] || return 0
+
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg client "$client" --arg status "$status" '
+    .assignments |= map(
+      if .client == $client then
+        .status = $status
+      else
+        .
+      end
+    )
+  ' "$(ip_registry_file)" > "$tmp"
+  mv -f "$tmp" "$(ip_registry_file)"
+}
+
+ccd_upsert_ifconfig_push() {
+  local client="$1"
+  local ip="$2"
+  local file tmp
+
+  file="$(ccd_dir)/${client}"
+  tmp="$(mktemp)"
+
+  if [[ -f "$file" ]]; then
+    awk -v ip="$ip" '
+      BEGIN { done=0 }
+      $1 == "ifconfig-push" {
+        if (!done) {
+          print "ifconfig-push " ip " 255.255.255.0"
+          done=1
+        }
+        next
+      }
+      { print }
+      END {
+        if (!done) {
+          print "ifconfig-push " ip " 255.255.255.0"
+        }
+      }
+    ' "$file" > "$tmp"
+  else
+    printf 'ifconfig-push %s 255.255.255.0\n' "$ip" > "$tmp"
+  fi
+
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+ip_assign() {
+  local client="$1"
+  local vpn_ip_request="${2:-auto}"
+  local owner="${3:-}"
+  local device="${4:-}"
+  local note="${5:-}"
+  local force="${6:-}"
+  local vpn_ip="$vpn_ip_request"
+
+  validate_client_name "$client"
+  ensure_ip_registry
+
+  if [[ -z "$vpn_ip" || "$vpn_ip" == "auto" ]]; then
+    vpn_ip="$(ip_registry_next_free_ip)"
+  else
+    validate_vpn_ip "$vpn_ip"
+  fi
+
+  ip_registry_upsert_assignment "$client" "$owner" "$device" "$vpn_ip" "$note" "$force" "registry"
+  ccd_upsert_ifconfig_push "$client" "$vpn_ip"
+  echo "[OK] IP fija asignada: $client -> $vpn_ip"
+}
+
+ip_list() {
+  ensure_ip_registry
+
+  printf 'CLIENT\tOWNER\tDEVICE\tVPN_IP\tSTATUS\tSOURCE\tNOTE\n'
+  jq -r '
+    .assignments[]
+    | [ .client, (.owner // "-"), (.device // "-"), .vpn_ip, (.status // "assigned"), (.source // "-"), (.note // "-") ]
+    | @tsv
+  ' "$(ip_registry_file)"
+}
+
+maybe_assign_vpn_ip() {
+  local client="$1"
+  local vpn_ip="${2:-}"
+  local owner="${3:-}"
+  local device="${4:-}"
+  local note="${5:-}"
+  local force="${6:-}"
+
+  [[ -n "$vpn_ip" ]] || return 0
+  ip_assign "$client" "$vpn_ip" "$owner" "$device" "$note" "$force"
 }
 
 sha256_file() {
@@ -151,17 +521,24 @@ apply_public_endpoint_to_profile() {
 client_create() {
   local client="$1"
   local with_pass="${2:-}"
+  local vpn_ip="${3:-}"
+  local owner="${4:-}"
+  local device="${5:-}"
+  local note="${6:-}"
+  local force="${7:-}"
 
   validate_client_name "$client"
   ensure_initialized
 
   if [[ "$with_pass" == "--pass" ]]; then
     echo "[+] Creando cliente CON password: $client"
-    compose run --rm openvpn-sv easyrsa build-client-full "$client"
+    openvpn_sv_run easyrsa build-client-full "$client"
   else
     echo "[+] Creando cliente SIN password: $client"
-    compose run --rm openvpn-sv easyrsa build-client-full "$client" nopass
+    openvpn_sv_run easyrsa build-client-full "$client" nopass
   fi
+
+  maybe_assign_vpn_ip "$client" "$vpn_ip" "$owner" "$device" "$note" "$force"
 }
 
 client_export() {
@@ -300,7 +677,13 @@ EOF
 client_create_and_export() {
   local client="$1"
   local with_pass="${2:-}"
-  client_create "$client" "$with_pass"
+  local vpn_ip="${3:-}"
+  local owner="${4:-}"
+  local device="${5:-}"
+  local note="${6:-}"
+  local force="${7:-}"
+
+  client_create "$client" "$with_pass" "$vpn_ip" "$owner" "$device" "$note" "$force"
   client_export "$client" "" "--force"
 }
 
@@ -313,14 +696,15 @@ client_revoke() {
 
   if [[ "$remove_mode" == "--remove" ]]; then
     echo "[+] Revocando y removiendo cliente: $client"
-    compose run --rm openvpn-sv ovpn_revokeclient "$client" remove
+    openvpn_sv_run ovpn_revokeclient "$client" remove
   else
     echo "[+] Revocando cliente: $client"
-    compose run --rm openvpn-sv ovpn_revokeclient "$client"
+    openvpn_sv_run ovpn_revokeclient "$client"
   fi
 
   # Intentar reiniciar para aplicar CRL (si el servicio existe)
   compose restart openvpn-sv >/dev/null 2>&1 || true
+  ip_registry_mark_status "$client" "revoked"
   echo "[OK] Cliente revocado: $client"
 }
 
@@ -402,23 +786,29 @@ Uso:
 
 Comandos (clientes):
   menu
-  create <nombre> [--pass]
+  create <nombre> [--pass] [--vpn-ip auto|<ip>] [--owner <owner>] [--device <device>] [--note <texto>] [--force]
   export <nombre> [--out <ruta>] [--force]
-  create-export <nombre> [--pass]
+  create-export <nombre> [--pass] [--vpn-ip auto|<ip>] [--owner <owner>] [--device <device>] [--note <texto>] [--force]
   package <nombre> [--pass] [--force]
   revoke <nombre> [--remove]
   list
   show <nombre>
+  ip-list
+  ip-assign <nombre> [--vpn-ip auto|<ip>] [--owner <owner>] [--device <device>] [--note <texto>] [--force]
+  ip-sync
 
 Notas:
   --force sobrescribe el archivo de salida (.ovpn). No recrea credenciales.
+  --vpn-ip auto asigna la siguiente IP libre según ovpn-data/ip-assignments.json
   Para rotar credenciales: revoke --remove + create-export
 
 Ejemplos:
   ./scripts/ovpn.sh create-export lechuga
+  ./scripts/ovpn.sh create-export lechuga-pc --vpn-ip auto --owner lechuga --device pc
   ./scripts/ovpn.sh package lechuga
   ./scripts/ovpn.sh revoke lechuga --remove
   ./scripts/ovpn.sh export lechuga --out ./clients/lechuga.ovpn
+  ./scripts/ovpn.sh ip-list
 EOF
 }
 
@@ -435,6 +825,7 @@ menu() {
     echo "6) Listar clientes"
     echo "7) Ver estado de cliente"
     echo "8) Empaquetar ZIP (ovpn + hashes)"
+    echo "9) Listar IPs fijas (JSON)"
     echo "0) Salir"
     echo
     read -r -p "> " choice
@@ -481,6 +872,9 @@ menu() {
           client_package "$client" ""
         fi
         ;;
+      9)
+        ip_list
+        ;;
       0)
         echo "Bye."
         return 0
@@ -509,10 +903,39 @@ main() {
     create)
       local client=""
       local with_pass=""
+      local vpn_ip=""
+      local owner=""
+      local device=""
+      local note=""
+      local force=""
       while [[ $# -gt 0 ]]; do
         case "$1" in
           --pass)
             with_pass="--pass"
+            shift || true
+            ;;
+          --vpn-ip)
+            vpn_ip="${2:-}"
+            [[ -n "$vpn_ip" ]] || die "Falta IP después de --vpn-ip"
+            shift 2 || true
+            ;;
+          --owner)
+            owner="${2:-}"
+            [[ -n "$owner" ]] || die "Falta valor después de --owner"
+            shift 2 || true
+            ;;
+          --device)
+            device="${2:-}"
+            [[ -n "$device" ]] || die "Falta valor después de --device"
+            shift 2 || true
+            ;;
+          --note)
+            note="${2:-}"
+            [[ -n "$note" ]] || die "Falta valor después de --note"
+            shift 2 || true
+            ;;
+          --force)
+            force="--force"
             shift || true
             ;;
           -* )
@@ -525,7 +948,7 @@ main() {
             ;;
         esac
       done
-      client_create "$client" "$with_pass"
+      client_create "$client" "$with_pass" "$vpn_ip" "$owner" "$device" "$note" "$force"
       ;;
     export)
       local client="${1:-}"
@@ -561,10 +984,39 @@ main() {
     create-export)
       local client=""
       local with_pass=""
+      local vpn_ip=""
+      local owner=""
+      local device=""
+      local note=""
+      local force=""
       while [[ $# -gt 0 ]]; do
         case "$1" in
           --pass)
             with_pass="--pass"
+            shift || true
+            ;;
+          --vpn-ip)
+            vpn_ip="${2:-}"
+            [[ -n "$vpn_ip" ]] || die "Falta IP después de --vpn-ip"
+            shift 2 || true
+            ;;
+          --owner)
+            owner="${2:-}"
+            [[ -n "$owner" ]] || die "Falta valor después de --owner"
+            shift 2 || true
+            ;;
+          --device)
+            device="${2:-}"
+            [[ -n "$device" ]] || die "Falta valor después de --device"
+            shift 2 || true
+            ;;
+          --note)
+            note="${2:-}"
+            [[ -n "$note" ]] || die "Falta valor después de --note"
+            shift 2 || true
+            ;;
+          --force)
+            force="--force"
             shift || true
             ;;
           -* )
@@ -577,7 +1029,7 @@ main() {
             ;;
         esac
       done
-      client_create_and_export "$client" "$with_pass"
+      client_create_and_export "$client" "$with_pass" "$vpn_ip" "$owner" "$device" "$note" "$force"
       ;;
     revoke)
       local client=""
@@ -605,6 +1057,59 @@ main() {
       ;;
     show)
       client_show "${1:-}"
+      ;;
+    ip-list)
+      ip_list
+      ;;
+    ip-sync)
+      ensure_ip_registry
+      ip_registry_sync_from_ccd
+      echo "[OK] Registro sincronizado desde $(ccd_dir)"
+      ;;
+    ip-assign)
+      local client=""
+      local vpn_ip="auto"
+      local owner=""
+      local device=""
+      local note=""
+      local force=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --vpn-ip)
+            vpn_ip="${2:-}"
+            [[ -n "$vpn_ip" ]] || die "Falta IP después de --vpn-ip"
+            shift 2 || true
+            ;;
+          --owner)
+            owner="${2:-}"
+            [[ -n "$owner" ]] || die "Falta valor después de --owner"
+            shift 2 || true
+            ;;
+          --device)
+            device="${2:-}"
+            [[ -n "$device" ]] || die "Falta valor después de --device"
+            shift 2 || true
+            ;;
+          --note)
+            note="${2:-}"
+            [[ -n "$note" ]] || die "Falta valor después de --note"
+            shift 2 || true
+            ;;
+          --force)
+            force="--force"
+            shift || true
+            ;;
+          -* )
+            die "Flag desconocida en ip-assign: $1"
+            ;;
+          *)
+            [[ -z "$client" ]] || die "Argumento extra en ip-assign: $1"
+            client="$1"
+            shift || true
+            ;;
+        esac
+      done
+      ip_assign "$client" "$vpn_ip" "$owner" "$device" "$note" "$force"
       ;;
     *)
       echo "Comando desconocido: $cmd" >&2

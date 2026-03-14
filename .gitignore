@@ -2,7 +2,8 @@
 .env
 
 # OpenVPN persistent data (contains keys/certs)
-ovpn-data/
+ovpn-data/*
+!ovpn-data/ip-assignments.json
 
 # OpenVPN S2S runtime data (keep templates/docs, ignore secrets)
 ovpn-s2s-data/client.conf
